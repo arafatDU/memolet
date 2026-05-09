@@ -10,6 +10,8 @@ if settings.GROQ_API_KEY:
 
 GEMINI_25_FLASH = "gemini/gemini-2.5-flash"
 GEMINI_20_FLASH = "gemini/gemini-2.0-flash"
+GEMMA_4_31B = "gemini/gemma-4-31b-it"
+GEMMA_4_26B = "gemini/gemma-4-26b-a4b-it"
 GROQ_LLAMA = "groq/llama3-8b-8192"
 
 class LLMRouter:
@@ -17,7 +19,7 @@ class LLMRouter:
         # Prefer gemini-2.5-flash, fall back to gemini-2.0-flash then groq
         if settings.GEMINI_API_KEY:
             self.default_model = GEMINI_25_FLASH
-            self.fallback_models = [GEMINI_20_FLASH]
+            self.fallback_models = [GEMINI_20_FLASH, GEMMA_4_31B, GEMMA_4_26B]
         else:
             self.default_model = GROQ_LLAMA
             self.fallback_models = []
@@ -28,7 +30,7 @@ class LLMRouter:
         # Human-readable model list for the UI
         self.available_models = []
         if settings.GEMINI_API_KEY:
-            self.available_models += [GEMINI_25_FLASH, GEMINI_20_FLASH]
+            self.available_models += [GEMINI_25_FLASH, GEMINI_20_FLASH, GEMMA_4_31B, GEMMA_4_26B]
         if settings.GROQ_API_KEY:
             self.available_models.append(GROQ_LLAMA)
 

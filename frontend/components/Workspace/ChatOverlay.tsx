@@ -239,6 +239,8 @@ export default function ChatOverlay() {
     if (model.includes('gemini-2.5-flash')) return 'Gemini 2.5 Flash';
     if (model.includes('gemini-2.0-flash')) return 'Gemini 2.0 Flash';
     if (model.includes('llama3')) return 'LLaMA 3 (Groq)';
+    if (model.includes('gemma-4-31b-it')) return 'Gemma 4 31B';
+    if (model.includes('gemma-4-26b-a4b-it')) return 'Gemma 4 26B';
     return model;
   };
 
