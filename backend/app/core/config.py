@@ -15,12 +15,26 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str
     GEMINI_API_KEY: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
+    NVIDIA_API_KEY: Optional[str] = None
+    DEEPSEEK_API_KEY: Optional[str] = None
+    MOONSHOT_API_KEY: Optional[str] = None
+    MINIMAX_API_KEY: Optional[str] = None
+    OPENROUTER_API_KEY: Optional[str] = None
+    TOGETHER_API_KEY: Optional[str] = None
+    MISTRAL_API_KEY: Optional[str] = None
+    COHERE_API_KEY: Optional[str] = None
+    CEREBRAS_API_KEY: Optional[str] = None
+    SAMBANOVA_API_KEY: Optional[str] = None
+    OLLAMA_API_BASE: Optional[str] = None
+    OLLAMA_BASE_URL: Optional[str] = "http://localhost:11434"
+    AI_GATEWAY_API_KEY: Optional[str] = None
+    DEFAULT_MODEL: Optional[str] = None
     JWT_SECRET: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 1 week
     
     class Config:
         env_file = ".env"
-        # Optional: default to case sensitive, etc
+        extra = "ignore"
 
 
 settings = Settings()

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMemoletStore } from '@/store/useMemoletStore';
-import { MessageSquareText, Send, X, Save, Sparkles, Plus, Trash2, MessageSquare, PanelLeft } from 'lucide-react';
+import { MessageSquareText, Send, X, Save, Sparkles, Plus, Trash2, MessageSquare, PanelLeft, CheckSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { chatApi, ConversationListResponse, ChatMessageDTO } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,7 @@ type Message = {
   role: 'user' | 'ai';
   content: string;
   citations?: string[];
+  model?: string;
 };
 
 export default function ChatOverlay() {
@@ -24,6 +25,7 @@ export default function ChatOverlay() {
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [models, setModels] = useState<string[]>([]);
+  const [groupedModels, setGroupedModels] = useState<Record<string, string[]>>({});
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [selectedMessagesForMemory, setSelectedMessagesForMemory] = useState<Set<string>>(new Set());
   const [savingMemory, setSavingMemory] = useState(false);
@@ -42,11 +44,12 @@ export default function ChatOverlay() {
     chatApi.getModels()
       .then(data => {
         setModels(data.models ?? []);
+        if (data.grouped) setGroupedModels(data.grouped);
         if (data.default) setSelectedModel(data.default);
       })
       .catch(() => {
-        setModels(['gemini/gemini-2.5-flash-preview-04-17', 'gemini/gemini-2.0-flash']);
-        setSelectedModel('gemini/gemini-2.5-flash-preview-04-17');
+        setModels(['gemini/gemini-2.5-flash', 'gemini/gemini-2.0-flash']);
+        setSelectedModel('gemini/gemini-2.5-flash');
       });
   }, []);
 
@@ -145,49 +148,83 @@ export default function ChatOverlay() {
     });
     
     const userMsgId = `usr-${Date.now()}`;
+    const aiMsgId = `ai-${Date.now()}`;
+
     const userMsg: Message = { id: userMsgId, role: 'user', content: text };
-    setMessages((prev) => [...prev, userMsg]);
+    const initialAiMsg: Message = { id: aiMsgId, role: 'ai', content: '', model: selectedModel };
+
+    setMessages((prev) => [...prev, userMsg, initialAiMsg]);
     setInputValue('');
     setLoading(true);
 
-    try {
-      const data = await chatApi.send({
+    chatApi.sendStream(
+      {
         message: text,
         active_memolet_ids: mentionedIds,
         model: selectedModel || undefined,
         conversation_id: currentConversationId || undefined
-      });
-
-      if (!currentConversationId && data.conversation_id) {
-        setCurrentConversationId(data.conversation_id);
-        fetchConversations(); // refresh list to get the new title
-      } else if (currentConversationId && messages.length === 0) {
-          fetchConversations(); // if it was the first message in an existing chat, refresh to get title
+      },
+      (token) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === aiMsgId ? { ...msg, content: msg.content + token } : msg
+          )
+        );
+      },
+      (data) => {
+        setLoading(false);
+        if (!currentConversationId && data.conversation_id) {
+          setCurrentConversationId(data.conversation_id);
+          fetchConversations();
+        } else if (currentConversationId && messages.length === 0) {
+          fetchConversations();
+        }
+        if (data.citations || data.model) {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMsgId
+                ? {
+                    ...msg,
+                    citations: data.citations?.flat() ?? [],
+                    model: data.model ?? selectedModel
+                  }
+                : msg
+            )
+          );
+        }
+      },
+      (err) => {
+        setLoading(false);
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === aiMsgId
+              ? {
+                  ...msg,
+                  content: msg.content || `⚠️ Error: ${err.message}\n\nMake sure you are logged in and the backend is running.`
+                }
+              : msg
+          )
+        );
       }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai-${Date.now()}`,
-          role: 'ai',
-          content: data.reply ?? 'No response.',
-          citations: data.citations?.flat() ?? [],
-        },
-      ]);
-    } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai-${Date.now()}`,
-          role: 'ai',
-          content: `⚠️ Error: ${errorMsg}\n\nMake sure you are logged in and the backend is running.`,
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
+    );
   }, [inputValue, loading, selectedModel, currentConversationId, messages.length, nodes]);
+
+  const aiMessageIds = messages
+    .filter((m) => m.role === 'ai' && m.id)
+    .map((m) => m.id as string);
+
+  const allSelected =
+    aiMessageIds.length > 0 &&
+    aiMessageIds.every((id) => selectedMessagesForMemory.has(id));
+
+  const handleToggleSelectAll = () => {
+    if (aiMessageIds.length === 0) return;
+    if (allSelected) {
+      setSelectedMessagesForMemory(new Set());
+    } else {
+      setSelectedMessagesForMemory(new Set(aiMessageIds));
+    }
+  };
 
   const toggleMemorySelection = (aiMsgId: string) => {
     setSelectedMessagesForMemory((prev) => {
@@ -236,12 +273,24 @@ export default function ChatOverlay() {
   };
 
   const displayModel = (model: string) => {
+    if (model === 'openai/gpt-4o-mini') return 'GPT-4o Mini (Vercel AI)';
+    if (model === 'openai/gpt-4o') return 'GPT-4o (Vercel AI)';
+    if (model === 'openai/gpt-4-turbo') return 'GPT-4 Turbo (Vercel AI)';
+    if (model === 'openai/o1') return 'OpenAI o1 (Vercel AI)';
+    if (model === 'anthropic/claude-3-haiku') return 'Claude 3 Haiku (Vercel AI)';
+    if (model === 'deepseek/deepseek-v3') return 'DeepSeek V3 (Vercel AI)';
+    if (model === 'meta/llama-3.3-70b') return 'LLaMA 3.3 70B (Vercel AI)';
+    if (model === 'meta/llama-3.1-8b') return 'LLaMA 3.1 8B (Vercel AI)';
+    if (model === 'mistral/ministral-8b') return 'Ministral 8B (Vercel AI)';
+    if (model === 'mistral/pixtral-12b') return 'Pixtral 12B (Vercel AI)';
+    if (model === 'amazon/nova-lite') return 'Amazon Nova Lite (Vercel AI)';
+    if (model.includes('gemma-4-31b-it')) return 'Gemma 4 31B Instruct';
+    if (model.includes('gemma-4-26b-a4b-it')) return 'Gemma 4 26B Instruct';
+    if (model.includes('gemini-3.6-flash')) return 'Gemini 3.6 Flash';
     if (model.includes('gemini-2.5-flash')) return 'Gemini 2.5 Flash';
-    if (model.includes('gemini-2.0-flash')) return 'Gemini 2.0 Flash';
-    if (model.includes('llama3')) return 'LLaMA 3 (Groq)';
-    if (model.includes('gemma-4-31b-it')) return 'Gemma 4 31B';
-    if (model.includes('gemma-4-26b-a4b-it')) return 'Gemma 4 26B';
-    return model;
+    if (model.includes('gemini-2.5-pro')) return 'Gemini 2.5 Pro';
+    if (model.startsWith('ollama/')) return `🦙 ${model.replace('ollama/', '')} (Ollama)`;
+    return model.split('/').pop() ?? model;
   };
 
   if (!rightSidebarOpen) {
@@ -335,15 +384,43 @@ export default function ChatOverlay() {
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 text-gray-600 bg-gray-50 flex-1 min-w-0"
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 text-gray-700 font-medium bg-gray-50 flex-1 min-w-0"
             >
               {models.length === 0 && <option value="">Loading models…</option>}
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {displayModel(m)}
-                </option>
-              ))}
+              {Object.keys(groupedModels).length > 0 ? (
+                Object.entries(groupedModels).map(([providerName, groupList]) => (
+                  <optgroup key={providerName} label={providerName}>
+                    {groupList.map((m) => (
+                      <option key={m} value={m}>
+                        {displayModel(m)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              ) : (
+                models.map((m) => (
+                  <option key={m} value={m}>
+                    {displayModel(m)}
+                  </option>
+                ))
+              )}
             </select>
+
+            {aiMessageIds.length > 0 && (
+              <button
+                onClick={handleToggleSelectAll}
+                className={cn(
+                  "flex items-center gap-1.5 py-1 px-2.5 rounded-lg text-xs font-medium transition whitespace-nowrap border",
+                  allSelected
+                    ? "bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100"
+                    : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                )}
+                title={allSelected ? "Deselect all chat pairs" : "Select all chat pairs for memory"}
+              >
+                <CheckSquare size={13} className={allSelected ? "text-blue-500" : "text-gray-400"} />
+                {allSelected ? "Deselect All" : "Select All"}
+              </button>
+            )}
 
             {selectedMessagesForMemory.size > 0 && (
               <button
@@ -429,16 +506,23 @@ export default function ChatOverlay() {
                 )}
               </div>
 
-              {msg.role === 'ai' && msg.id && (
-                <label className="flex items-center gap-1.5 mt-0.5 text-xs text-gray-400 cursor-pointer hover:text-blue-500 transition opacity-0 group-hover:opacity-100">
-                  <input
-                    type="checkbox"
-                    checked={selectedMessagesForMemory.has(msg.id)}
-                    onChange={() => toggleMemorySelection(msg.id!)}
-                    className="rounded text-blue-500 focus:ring-blue-500 w-3 h-3"
-                  />
-                  Save to Memory
-                </label>
+              {msg.role === 'ai' && (
+                <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                  <span className="inline-flex items-center gap-1 font-mono text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded border border-gray-200">
+                    ⚡ {displayModel(msg.model || selectedModel)}
+                  </span>
+                  {msg.id && (
+                    <label className="flex items-center gap-1.5 cursor-pointer hover:text-blue-500 transition opacity-0 group-hover:opacity-100">
+                      <input
+                        type="checkbox"
+                        checked={selectedMessagesForMemory.has(msg.id)}
+                        onChange={() => toggleMemorySelection(msg.id!)}
+                        className="rounded text-blue-500 focus:ring-blue-500 w-3 h-3"
+                      />
+                      Save to Memory
+                    </label>
+                  )}
+                </div>
               )}
             </div>
           ))}

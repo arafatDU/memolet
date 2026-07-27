@@ -1,5 +1,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+import json
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 
@@ -33,6 +35,8 @@ class ChatResponse(BaseModel):
     citations: List[List[str]]
     conflict_warning: bool
     conversation_id: str
+    model: Optional[str] = None
+
 
 
 class MemorySaveRequest(BaseModel):
@@ -42,12 +46,14 @@ class MemorySaveRequest(BaseModel):
 
 @router.get("/models")
 def get_available_models():
-    """Returns available LLM models."""
+    """Returns available LLM models grouped by provider."""
     models = llm_router.available_models if llm_router.available_models else [llm_router.default_model]
     return {
         "models": models,
+        "grouped": llm_router.grouped_models,
         "default": llm_router.default_model,
     }
+
 
 
 @router.post("/", response_model=ChatResponse)
@@ -74,6 +80,8 @@ def generate_chat(
         content=req.message
     )
     db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
 
     # 1. Fetch memolets by ID (if any cited with @mention)
     memolets = []
@@ -93,23 +101,22 @@ def generate_chat(
     conflict_warning = trust_service.evaluate_conflict(contents)
 
     # 3. Build prompt and call LLM
-    system_prompt = (
-        "You are a helpful AI assistant with access to the user's memory notes. "
-        "Answer concisely and accurately based on the provided context when available."
-    )
+    llm_messages = []
     if contents:
-        system_prompt += "\n\nMemory Context:\n" + "\n---\n".join(contents)
+        system_prompt = (
+            "You are an intelligent AI assistant. "
+            "Answer the user's prompt directly, accurately, and thoroughly using the provided Memory Context where relevant.\n\n"
+            "Memory Context:\n" + "\n---\n".join(contents)
+        )
+        llm_messages.append({"role": "system", "content": system_prompt})
 
     # Load recent conversation history
     recent_messages = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation.id).order_by(ChatMessage.created_at.asc()).all()
-    llm_messages = [{"role": "system", "content": system_prompt}]
-    
-    # We only pass the last 10 messages for context window reasons, excluding the system prompt
     for msg in recent_messages[-10:]:
-        # Skip the user message we just saved as we will add it manually at the end if it's the last one, wait, it IS the last one in the DB now.
         llm_messages.append({"role": msg.role if msg.role in ["user", "system", "assistant"] else "assistant" if msg.role == "ai" else msg.role, "content": msg.content})
 
-    # The user msg we just saved is already in recent_messages and thus in llm_messages.
+    if not llm_messages or llm_messages[-1].get("content") != req.message:
+        llm_messages.append({"role": "user", "content": req.message})
 
     response = llm_router.generate_response(llm_messages, model=req.model)
 
@@ -147,8 +154,108 @@ def generate_chat(
         confidence_heatmap=heatmap,
         citations=citations,
         conflict_warning=conflict_warning,
-        conversation_id=str(conversation.id)
+        conversation_id=str(conversation.id),
+        model=req.model or llm_router.default_model
     )
+
+
+@router.post("/stream")
+def generate_chat_stream(
+    req: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """Streams LLM tokens real-time using Server-Sent Events (SSE)."""
+    conversation = None
+    if req.conversation_id:
+        conversation = db.query(Conversation).filter(Conversation.id == req.conversation_id, Conversation.user_id == current_user.id).first()
+        
+    if not conversation:
+        conversation = Conversation(user_id=current_user.id)
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+
+    user_msg = ChatMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=req.message
+    )
+    db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
+
+    memolets = []
+    if req.active_memolet_ids:
+        try:
+            import uuid
+            valid_ids = [uuid.UUID(mid) for mid in req.active_memolet_ids if mid]
+            if valid_ids:
+                memolets = db.query(MemoletModel).filter(MemoletModel.id.in_(valid_ids)).all()
+        except Exception as e:
+            logger.warning(f"Could not parse memolet IDs: {e}")
+
+    contents = [m.text for m in memolets]
+    active_ids = [str(m.id) for m in memolets]
+    conflict_warning = trust_service.evaluate_conflict(contents)
+
+    llm_messages = []
+    if contents:
+        system_prompt = (
+            "You are an intelligent AI assistant. "
+            "Answer the user's prompt directly, accurately, and thoroughly using the provided Memory Context where relevant.\n\n"
+            "Memory Context:\n" + "\n---\n".join(contents)
+        )
+        llm_messages.append({"role": "system", "content": system_prompt})
+
+    recent_messages = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation.id).order_by(ChatMessage.created_at.asc()).all()
+    for msg in recent_messages[-10:]:
+        llm_messages.append({"role": msg.role if msg.role in ["user", "system", "assistant"] else "assistant" if msg.role == "ai" else msg.role, "content": msg.content})
+
+    if not llm_messages or llm_messages[-1].get("content") != req.message:
+        llm_messages.append({"role": "user", "content": req.message})
+
+    selected_model = req.model or llm_router.default_model
+
+    def event_stream():
+        full_reply = []
+        for token in llm_router.generate_response_stream(llm_messages, model=selected_model):
+            full_reply.append(token)
+            yield f"data: {json.dumps({'token': token})}\n\n"
+
+        reply_text = "".join(full_reply)
+        sentences = [s.strip() + "." for s in reply_text.split(".") if len(s.strip()) > 3]
+        if not sentences:
+            sentences = [reply_text]
+
+        heatmap = trust_service.compute_confidence_heatmap(sentences, contents)
+        citations = trust_service.trace_citations(sentences, contents, active_ids)
+        flattened_citations = [c for sublist in citations for c in sublist] if citations else []
+
+        if not conversation.title:
+            words = reply_text.split()
+            conversation.title = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
+
+        ai_msg = ChatMessage(
+            conversation_id=conversation.id,
+            role="ai",
+            content=reply_text,
+            citations=flattened_citations
+        )
+        db.add(ai_msg)
+        db.commit()
+
+        final_payload = {
+            "done": True,
+            "conversation_id": str(conversation.id),
+            "citations": citations,
+            "confidence_heatmap": heatmap,
+            "conflict_warning": conflict_warning,
+            "model": selected_model
+        }
+        yield f"data: {json.dumps(final_payload)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 @router.get("/conversations", response_model=List[ConversationListResponse])
 def get_conversations(db: Session = Depends(get_db), current_user: User = Depends(deps.get_current_user)):
