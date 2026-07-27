@@ -171,6 +171,7 @@ export interface ChatResponse {
   citations: string[][];
   conflict_warning: boolean;
   conversation_id: string;
+  model?: string;
 }
 
 export interface MemorySaveRequest {
@@ -184,6 +185,66 @@ export const chatApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  sendStream: async (
+    payload: ChatRequest,
+    onToken: (token: string) => void,
+    onComplete: (data: { conversation_id: string; citations?: string[][]; model?: string }) => void,
+    onError: (err: Error) => void
+  ) => {
+    const token = getToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail ?? `HTTP ${res.status}`);
+      }
+
+      if (!res.body) throw new Error('ReadableStream not supported');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.slice(6);
+            try {
+              const data = JSON.parse(jsonStr);
+              if (data.token) {
+                onToken(data.token);
+              }
+              if (data.done) {
+                onComplete(data);
+              }
+            } catch {
+              // ignore partial json
+            }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      onError(err instanceof Error ? err : new Error('Stream request failed'));
+    }
+  },
   saveMemory: (payload: MemorySaveRequest) =>
     apiFetch<{ message: string; saved: { id: string; summary: string }[] }>(
       '/chat/save-memory',
@@ -193,7 +254,7 @@ export const chatApi = {
       }
     ),
   getModels: () =>
-    apiFetch<{ models: string[]; default: string }>('/chat/models'),
+    apiFetch<{ models: string[]; grouped?: Record<string, string[]>; default: string }>('/chat/models'),
   getConversations: () =>
     apiFetch<ConversationListResponse[]>('/chat/conversations'),
   getConversation: (id: string) =>
