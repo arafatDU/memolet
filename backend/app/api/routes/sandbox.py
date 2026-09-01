@@ -17,9 +17,9 @@ def get_sandbox_state(
     current_user: User = Depends(deps.get_current_user)
 ):
     """Retrieve all memolets to display on the canvas/sandbox with their positions."""
-    # Assuming memolets belong to the user's conversations
-    memolets = db.query(Memolet).join(Memolet.conversation).filter(
-        Memolet.conversation.has(user_id=current_user.id)
+    memolets = db.query(Memolet).filter(
+        (Memolet.user_id == current_user.id) |
+        (Memolet.conversation.has(user_id=current_user.id))
     ).all()
     return memolets
 
@@ -35,7 +35,7 @@ def update_sandbox_state(
     for update in update_req.memolet_updates:
         db_memolet = db.query(Memolet).filter(
             Memolet.id == update.id,
-            Memolet.conversation.has(user_id=current_user.id)
+            (Memolet.user_id == current_user.id) | (Memolet.conversation.has(user_id=current_user.id))
         ).first()
         
         if not db_memolet:
@@ -68,9 +68,9 @@ def auto_organize(
     current_user: User = Depends(deps.get_current_user)
 ):
     """Trigger KMeans and Voronoi logic to cluster scattered Memolets automatically."""
-    # Get all user's memolets
-    memolets = db.query(Memolet).join(Memolet.conversation).filter(
-        Memolet.conversation.has(user_id=current_user.id)
+    memolets = db.query(Memolet).filter(
+        (Memolet.user_id == current_user.id) |
+        (Memolet.conversation.has(user_id=current_user.id))
     ).all()
     
     if not memolets:
@@ -93,7 +93,7 @@ def context_weighting(
     valid_ids = [uuid.UUID(mid) for mid in memolet_ids]
     memolets = db.query(Memolet).filter(
         Memolet.id.in_(valid_ids),
-        Memolet.conversation.has(user_id=current_user.id)
+        (Memolet.user_id == current_user.id) | (Memolet.conversation.has(user_id=current_user.id))
     ).all()
         
     weights = sandbox_service.calculate_prompt_weights(memolets)

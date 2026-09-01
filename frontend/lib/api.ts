@@ -1,10 +1,36 @@
-/** Centralised API client — automatically attaches Bearer token */
-
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
-function getToken(): string | null {
+let clerkTokenGetter: (() => Promise<string | null>) | null = null;
+
+export function setClerkTokenGetter(getter: () => Promise<string | null>) {
+  clerkTokenGetter = getter;
+}
+
+export async function getToken(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
+
+  if (clerkTokenGetter) {
+    try {
+      const token = await clerkTokenGetter();
+      if (token) return token;
+    } catch {
+      // Fallback
+    }
+  }
+
+  // Check if Clerk is loaded on window
+  // @ts-ignore
+  if (typeof window !== 'undefined' && window.Clerk?.session) {
+    try {
+      // @ts-ignore
+      const token = await window.Clerk.session.getToken();
+      if (token) return token;
+    } catch {
+      // Fallback
+    }
+  }
+
   return localStorage.getItem('memolet_token');
 }
 
@@ -15,7 +41,7 @@ export async function apiFetch<T = unknown>(
   options: FetchOptions = {}
 ): Promise<T> {
   const { skipAuth = false, headers = {}, ...rest } = options;
-  const token = getToken();
+  const token = await getToken();
 
   const mergedHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -34,7 +60,10 @@ export async function apiFetch<T = unknown>(
   if (res.status === 401) {
     localStorage.removeItem('memolet_token');
     localStorage.removeItem('memolet_user');
-    window.location.href = '/';
+    // If not on login/register/landing, redirect to login
+    if (typeof window !== 'undefined' && !['/', '/login', '/register'].includes(window.location.pathname)) {
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
 
@@ -191,7 +220,7 @@ export const chatApi = {
     onComplete: (data: { conversation_id: string; citations?: string[][]; model?: string }) => void,
     onError: (err: Error) => void
   ) => {
-    const token = getToken();
+    const token = await getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };

@@ -29,7 +29,13 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: Optional[str] = "http://localhost:11434"
     AI_GATEWAY_API_KEY: Optional[str] = None
     DEFAULT_MODEL: Optional[str] = None
-    JWT_SECRET: str
+    CLERK_SECRET_KEY: Optional[str] = None
+    CLERK_PUBLISHABLE_KEY: Optional[str] = None
+    CLERK_FRONTEND_API_URL: Optional[str] = "https://fine-ladybug-8955.clerk.accounts.dev"
+    CLERK_BACKEND_API_URL: Optional[str] = "https://api.clerk.com"
+    CLERK_JWKS_URL: Optional[str] = "https://fine-ladybug-8955.clerk.accounts.dev/.well-known/jwks.json"
+    CLERK_PEM_PUBLIC_KEY: Optional[str] = None
+    JWT_SECRET: str = "super_secret_jwt_key_here"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 1 week
     
     class Config:

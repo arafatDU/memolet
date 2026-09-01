@@ -25,6 +25,9 @@ class MockSession:
     def join(self, *args, **kwargs):
         return self
 
+    def order_by(self, *args, **kwargs):
+        return self
+
     def first(self):
         return None
 

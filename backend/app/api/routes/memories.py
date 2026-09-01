@@ -69,8 +69,11 @@ def get_memories(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Fetch all memolets ordered by creation time (oldest first = lowest display ID)."""
-    memolets = db.query(MemoletModel).order_by(MemoletModel.created_at.asc()).all()
+    """Fetch all memolets belonging to the current user ordered by creation time."""
+    memolets = db.query(MemoletModel).filter(
+        (MemoletModel.user_id == current_user.id) |
+        (MemoletModel.conversation.has(user_id=current_user.id))
+    ).order_by(MemoletModel.created_at.asc()).all()
     return memolets
 
 
@@ -80,12 +83,15 @@ def seed_demo_memories(
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Seeds the database with demo memolets so the UI has real data to display.
-    Only inserts if fewer than 3 memolets exist (idempotent).
+    Seeds the database with demo memolets specifically for the current user so the UI has initial data.
+    Only inserts if the current user has fewer than 3 memolets (idempotent).
     """
-    existing_count = db.query(MemoletModel).count()
+    existing_count = db.query(MemoletModel).filter(
+        (MemoletModel.user_id == current_user.id) |
+        (MemoletModel.conversation.has(user_id=current_user.id))
+    ).count()
     if existing_count >= 3:
-        return {"message": "Demo data already exists.", "count": existing_count}
+        return {"message": "Demo data already exists for this user.", "count": existing_count}
 
     created = []
     try:
@@ -101,6 +107,7 @@ def seed_demo_memories(
                     embedding = None
 
                 db_memolet = MemoletModel(
+                    user_id=current_user.id,
                     text=serialized_text,
                     keywords=pair["keywords"],
                     color=pair["color"],
@@ -111,7 +118,7 @@ def seed_demo_memories(
                 db.refresh(db_memolet)
 
                 try:
-                    graphrag_service.add_concepts_to_graph(neo4j_session, db_memolet)
+                    graphrag_service.add_concepts_to_graph(neo4j_session, db_memolet, user_id=str(current_user.id))
                 except Exception as e:
                     logger.warning(f"Neo4j seed failed: {e}")
 
@@ -121,7 +128,7 @@ def seed_demo_memories(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Seed failed: {str(e)}")
 
-    return {"message": f"Seeded {len(created)} demo memolets.", "created": created}
+    return {"message": f"Seeded {len(created)} demo memolets for user.", "created": created}
 
 
 @router.get("/search", response_model=List[Memolet])
@@ -131,27 +138,30 @@ def search_memories(
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    GraphRAG-augmented hybrid search:
+    GraphRAG-augmented hybrid search strictly scoped to the current user:
     1. Extract keywords from query text
-    2. Retrieve related memolet IDs from Neo4j concept graph
-    3. Combine with vector similarity search
+    2. Retrieve related memolet IDs from Neo4j concept graph (filtered to user)
+    3. Combine with vector similarity search on user's memolets
     4. Return ranked results
     """
     if not query.strip():
         return []
 
-    all_memolets = db.query(MemoletModel).all()
+    all_memolets = db.query(MemoletModel).filter(
+        (MemoletModel.user_id == current_user.id) |
+        (MemoletModel.conversation.has(user_id=current_user.id))
+    ).all()
     if not all_memolets:
         return []
 
-    # --- Step 1: GraphRAG — keyword-based graph traversal ---
+    # --- Step 1: GraphRAG — keyword-based graph traversal for current user ---
     graph_memolet_ids: set[str] = set()
     query_keywords = [w.lower().strip(".,;:?!") for w in query.split() if len(w) > 3]
 
     try:
         with neo4j_connector.get_session() as neo4j_session:
             graph_results = graphrag_service.retrieve_context_subgraph(
-                neo4j_session, query_keywords
+                neo4j_session, query_keywords, user_id=str(current_user.id)
             )
             for r in graph_results:
                 if r.get("memolet_id"):
@@ -159,11 +169,10 @@ def search_memories(
     except Exception as e:
         logger.warning(f"GraphRAG search failed (continuing with vector only): {e}")
 
-    # --- Step 2: Vector similarity search ---
+    # --- Step 2: Vector similarity search on user's memolets ---
     texts = [m.text for m in all_memolets]
     embeddings = [m.embedding for m in all_memolets]
 
-    # Filter out memolets with no embedding for vector scoring
     scored_ids: list[str] = []
     try:
         import numpy as np
@@ -182,12 +191,13 @@ def search_memories(
         logger.warning(f"Vector search failed: {e}")
 
     # --- Step 3: Merge results (graph hits first, then vector) ---
+    allowed_user_ids = {str(m.id) for m in all_memolets}
     merged_ids: list[str] = []
     for mid in list(graph_memolet_ids) + scored_ids:
-        if mid not in merged_ids:
+        if mid in allowed_user_ids and mid not in merged_ids:
             merged_ids.append(mid)
 
-    # Fallback: return all if nothing matched
+    # Fallback: return user's memolets if nothing matched
     if not merged_ids:
         return all_memolets[:10]
 
@@ -211,7 +221,19 @@ def reinforce_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    import uuid
     from app.services.reinforcement import reinforcement_service
 
-    reinforcement_service.reinforce_memory(db, memolet_id)
+    try:
+        valid_id = uuid.UUID(memolet_id)
+        db_memolet = db.query(MemoletModel).filter(
+            MemoletModel.id == valid_id,
+            (MemoletModel.user_id == current_user.id) | (MemoletModel.conversation.has(user_id=current_user.id))
+        ).first()
+        if not db_memolet:
+            raise HTTPException(status_code=404, detail="Memolet not found")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid memolet ID")
+
+    reinforcement_service.reinforce_memory(db, str(valid_id))
     return {"status": "success"}

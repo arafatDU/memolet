@@ -48,6 +48,7 @@ interface MemoletState {
 
   memoriesNeedsSync: boolean;
   setMemoriesNeedsSync: (needsSync: boolean) => void;
+  resetStore: () => void;
 }
 
 export const useMemoletStore = create<MemoletState>((set, get) => ({
@@ -57,6 +58,16 @@ export const useMemoletStore = create<MemoletState>((set, get) => ({
   rightSidebarOpen: false,
   selectedNodeId: null,
   memoriesNeedsSync: true,
+
+  resetStore: () =>
+    set({
+      nodes: [],
+      edges: [],
+      leftSidebarOpen: false,
+      rightSidebarOpen: false,
+      selectedNodeId: null,
+      memoriesNeedsSync: true,
+    }),
 
   setNodes: (nodes) => set({ nodes }),
 

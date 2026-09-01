@@ -12,11 +12,15 @@ class User(Base):
     __tablename__ = "users"
     
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    username: Mapped[str] = mapped_column(String, unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String, nullable=False, default="")
+    clerk_user_id: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    auth_provider: Mapped[Optional[str]] = mapped_column(String, default="clerk", nullable=True)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String, nullable=True, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     conversations: Mapped[List["Conversation"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    memolets: Mapped[List["Memolet"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -47,7 +51,8 @@ class Memolet(Base):
     __tablename__ = "memolets"
     
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True)
     
     text: Mapped[str] = mapped_column(String)
     weight: Mapped[Optional[float]] = mapped_column(Float, default=1.0)
@@ -66,4 +71,5 @@ class Memolet(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
+    user: Mapped[Optional["User"]] = relationship(back_populates="memolets")
     conversation: Mapped[Optional["Conversation"]] = relationship(back_populates="memolets")

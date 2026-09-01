@@ -90,7 +90,10 @@ def generate_chat(
             import uuid
             valid_ids = [uuid.UUID(mid) for mid in req.active_memolet_ids if mid]
             if valid_ids:
-                memolets = db.query(MemoletModel).filter(MemoletModel.id.in_(valid_ids)).all()
+                memolets = db.query(MemoletModel).filter(
+                    MemoletModel.id.in_(valid_ids),
+                    (MemoletModel.user_id == current_user.id) | (MemoletModel.conversation.has(user_id=current_user.id))
+                ).all()
         except Exception as e:
             logger.warning(f"Could not parse memolet IDs: {e}")
 
@@ -191,7 +194,10 @@ def generate_chat_stream(
             import uuid
             valid_ids = [uuid.UUID(mid) for mid in req.active_memolet_ids if mid]
             if valid_ids:
-                memolets = db.query(MemoletModel).filter(MemoletModel.id.in_(valid_ids)).all()
+                memolets = db.query(MemoletModel).filter(
+                    MemoletModel.id.in_(valid_ids),
+                    (MemoletModel.user_id == current_user.id) | (MemoletModel.conversation.has(user_id=current_user.id))
+                ).all()
         except Exception as e:
             logger.warning(f"Could not parse memolet IDs: {e}")
 
@@ -354,6 +360,7 @@ def save_chat_to_memory(
                 assigned_color = random.choice(PASTEL_COLORS)
                 
                 db_memolet = MemoletModel(
+                    user_id=current_user.id,
                     conversation_id=conversation_id,
                     text=serialized_text,
                     keywords=keywords,
@@ -366,7 +373,7 @@ def save_chat_to_memory(
 
                 # --- Update GraphRAG (Neo4j) ---
                 try:
-                    graphrag_service.add_concepts_to_graph(neo4j_session, db_memolet)
+                    graphrag_service.add_concepts_to_graph(neo4j_session, db_memolet, user_id=str(current_user.id))
                 except Exception as e:
                     logger.warning(f"Neo4j update failed for memolet {db_memolet.id}: {e}")
 
