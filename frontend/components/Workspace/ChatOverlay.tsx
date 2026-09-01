@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMemoletStore } from '@/store/useMemoletStore';
-import { MessageSquareText, Send, X, Save, Sparkles, Plus, Trash2, MessageSquare, PanelLeft, CheckSquare } from 'lucide-react';
+import { MessageSquareText, Send, X, Save, Sparkles, Plus, Trash2, MessageSquare, PanelLeft, CheckSquare, Zap, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { chatApi, ConversationListResponse, ChatMessageDTO } from '@/lib/api';
+import { chatApi, ConversationListResponse, ChatMessageDTO, memoriesApi, MemoletDTO, parseMemoletText } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -17,7 +17,7 @@ type Message = {
 };
 
 export default function ChatOverlay() {
-  const { rightSidebarOpen, setRightSidebarOpen, highlightNode, nodes, setMemoriesNeedsSync } = useMemoletStore();
+  const { rightSidebarOpen, setRightSidebarOpen, highlightNode, nodes, setNodes, setMemoriesNeedsSync } = useMemoletStore();
 
   const [inputValue, setInputValue] = useState('');
   const [showMention, setShowMention] = useState(false);
@@ -30,6 +30,11 @@ export default function ChatOverlay() {
   const [selectedMessagesForMemory, setSelectedMessagesForMemory] = useState<Set<string>>(new Set());
   const [savingMemory, setSavingMemory] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // Real-Time Context Suggestion State
+  const [suggestions, setSuggestions] = useState<MemoletDTO[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
 
   // New Chat History States
   const [conversations, setConversations] = useState<ConversationListResponse[]>([]);
@@ -123,6 +128,85 @@ export default function ChatOverlay() {
     }
   }, [inputValue]);
 
+  // Debounced real-time context suggestion from GraphRAG
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    // Extract query text without @mention tags
+    const cleanText = inputValue.replace(/@[\w-]+/g, '').trim();
+
+    if (cleanText.length < 3 || showMention || dismissed) {
+      if (cleanText.length < 3) {
+        setSuggestions([]);
+        setDismissed(false);
+      }
+      return;
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      setSuggestionsLoading(true);
+      try {
+        const results = await memoriesApi.search(cleanText);
+        setSuggestions(results.slice(0, 3));
+      } catch (err) {
+        console.warn('Real-time suggestion error:', err);
+        setSuggestions([]);
+      } finally {
+        setSuggestionsLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [inputValue, showMention, dismissed]);
+
+  // Option 1: Add to Canvas
+  const handleAddToCanvas = useCallback((memolet: MemoletDTO) => {
+    const existingNode = nodes.find((n) => n.id === memolet.id);
+    if (existingNode) {
+      return existingNode.data.displayId || existingNode.id;
+    }
+    const parsed = parseMemoletText(memolet.text);
+    const displayId = memolet.displayId || `${Math.floor(nodes.length / 10) + 1}_${nodes.length % 10}`;
+    const newNode = {
+      id: memolet.id,
+      type: 'memolet' as const,
+      position: {
+        x: Math.floor((Math.random() * 500 + 80) / 160) * 160,
+        y: Math.floor((Math.random() * 350 + 80) / 160) * 160,
+      },
+      data: {
+        text: memolet.text || '',
+        keywords: memolet.keywords || [],
+        color: memolet.color || '#e0f2fe',
+        weight: memolet.weight || 1,
+        summary: parsed.summary,
+        displayId: displayId,
+      },
+      style: { width: 160, height: 160 },
+    };
+    setNodes([...nodes, newNode as any]);
+    return displayId;
+  }, [nodes, setNodes]);
+
+  // Option 2: Direct Inject (auto-adds to canvas & appends @displayId to prompt)
+  const handleDirectInject = useCallback((memolet: MemoletDTO) => {
+    const displayId = handleAddToCanvas(memolet);
+    const mentionTag = `@${displayId}`;
+    
+    setInputValue((prev) => {
+      const alreadyHasTag = prev.includes(mentionTag) || prev.includes(`@${memolet.id}`);
+      if (alreadyHasTag) return prev;
+      const trimmed = prev.trimEnd();
+      return trimmed ? `${trimmed} ${mentionTag} ` : `${mentionTag} `;
+    });
+
+    inputRef.current?.focus();
+  }, [handleAddToCanvas]);
+
   const insertMention = useCallback((id: string) => {
     setInputValue((prev) => prev.replace(/@\w*$/, `@${id} `));
     setShowMention(false);
@@ -140,6 +224,10 @@ export default function ChatOverlay() {
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
     if (!text || loading) return;
+
+    // Reset suggestions upon send
+    setSuggestions([]);
+    setDismissed(false);
 
     const mentionedStrs = [...text.matchAll(/@([\w-]+)/g)].map((match) => match[1]);
     const mentionedIds = mentionedStrs.map(str => {
@@ -542,6 +630,125 @@ export default function ChatOverlay() {
 
         {/* Input area */}
         <div className="bg-white border-t border-gray-200 p-3 relative">
+          {/* ⚡ Floating Real-Time Context Suggestion Panel */}
+          {suggestions.length > 0 && !showMention && !dismissed && (
+            <div className="absolute bottom-full left-3 right-3 mb-2 bg-white/95 backdrop-blur-md border border-blue-200/90 rounded-2xl shadow-xl p-3 z-40 animate-in slide-in-from-bottom-2 duration-200">
+              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700">
+                  <Sparkles size={14} className="text-blue-500 animate-pulse" />
+                  <span>Suggested Relevant Memories</span>
+                  <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-mono">
+                    {suggestions.length}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setDismissed(true)}
+                  className="text-gray-400 hover:text-gray-600 p-0.5 rounded-md hover:bg-gray-100 transition"
+                  title="Dismiss suggestions"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2 max-h-56 overflow-y-auto pr-0.5">
+                {suggestions.map((m) => {
+                  const parsed = parseMemoletText(m.text);
+                  const summary = parsed.summary || m.text.slice(0, 100);
+                  const existingNode = nodes.find((n) => n.id === m.id);
+                  const isOnCanvas = Boolean(existingNode);
+                  const displayId = existingNode?.data.displayId || m.displayId || '1_0';
+                  const isInPrompt = inputValue.includes(`@${displayId}`) || inputValue.includes(`@${m.id}`);
+
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex items-start justify-between gap-3 p-2.5 rounded-xl border border-gray-100 bg-gray-50/70 hover:bg-blue-50/40 hover:border-blue-200 transition group"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span
+                            className="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded border shadow-2xs"
+                            style={{
+                              backgroundColor: m.color || '#e0f2fe',
+                              borderColor: '#cbd5e1',
+                              color: '#1e293b',
+                            }}
+                          >
+                            📝 {displayId}
+                          </span>
+                          {m.keywords && m.keywords.length > 0 && (
+                            <div className="flex items-center gap-1 overflow-hidden">
+                              {m.keywords.slice(0, 3).map((k, idx) => (
+                                <span key={idx} className="text-[10px] text-gray-400 font-medium truncate">
+                                  #{k}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-700 line-clamp-2 leading-relaxed font-normal">
+                          {summary}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-shrink-0 self-center">
+                        {/* Option 1: Add to Canvas */}
+                        <button
+                          onClick={() => handleAddToCanvas(m)}
+                          disabled={isOnCanvas}
+                          className={cn(
+                            "px-2.5 py-1 text-xs font-semibold rounded-lg transition flex items-center gap-1 shadow-2xs",
+                            isOnCanvas
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default"
+                              : "bg-white hover:bg-gray-100 text-gray-700 border border-gray-300 hover:border-gray-400 cursor-pointer"
+                          )}
+                          title={isOnCanvas ? "Already added to canvas" : "Add memory to React Flow sandbox"}
+                        >
+                          {isOnCanvas ? (
+                            <>
+                              <Check size={12} className="text-emerald-600" />
+                              <span>Canvas</span>
+                            </>
+                          ) : (
+                            <>
+                              <Plus size={12} />
+                              <span>+ Canvas</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Option 2: Direct Inject */}
+                        <button
+                          onClick={() => handleDirectInject(m)}
+                          disabled={isInPrompt}
+                          className={cn(
+                            "px-2.5 py-1 text-xs font-semibold rounded-lg transition flex items-center gap-1 shadow-2xs",
+                            isInPrompt
+                              ? "bg-blue-100 text-blue-700 border border-blue-300 cursor-default"
+                              : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/10 cursor-pointer"
+                          )}
+                          title={isInPrompt ? "Already cited in prompt" : "Auto-add to canvas and inject into prompt"}
+                        >
+                          {isInPrompt ? (
+                            <>
+                              <Check size={12} className="text-blue-700" />
+                              <span>Injected</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap size={12} className="fill-current text-yellow-300" />
+                              <span>⚡ Inject</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {showMention && (
             <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-xl max-h-48 overflow-y-auto z-50">
               <div className="px-3 py-2 text-xs font-bold text-blue-600 bg-blue-50 sticky top-0 rounded-t-xl">
