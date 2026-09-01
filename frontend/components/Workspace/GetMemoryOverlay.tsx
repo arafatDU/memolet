@@ -119,9 +119,9 @@ export default function GetMemoryOverlay() {
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load all memories when overlay opens and needs sync
+  // Load all memories when overlay opens
   useEffect(() => {
-    if (!leftSidebarOpen || !memoriesNeedsSync) return;
+    if (!leftSidebarOpen) return;
     setLoading(true);
     memoriesApi.getAll()
       .then((data) => {

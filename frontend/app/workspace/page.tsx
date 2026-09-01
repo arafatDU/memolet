@@ -3,6 +3,7 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useMemoletStore } from '@/store/useMemoletStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { UserButton, useUser } from '@clerk/nextjs';
 import LeftSidebar from '@/components/Sidebar/LeftSidebar';
 import ChatOverlay from '@/components/Workspace/ChatOverlay';
 import GetMemoryOverlay from '@/components/Workspace/GetMemoryOverlay';
@@ -10,21 +11,22 @@ import SandboxCanvas from '@/components/Canvas/SandboxCanvas';
 import DocViewer from '@/components/Sidebar/DocViewer';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { useEffect, useRef, useState } from 'react';
-import { LogOut, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { memoriesApi, parseMemoletText } from '@/lib/api';
 
 function WorkspaceInner() {
   const router = useRouter();
-  const { setNodes, nodes, setMemoriesNeedsSync } = useMemoletStore();
+  const { user: clerkUser } = useUser();
+  const { setNodes, nodes, setMemoriesNeedsSync, resetStore } = useMemoletStore();
   const selectedNodeId = useMemoletStore((s) => s.selectedNodeId);
-  const initialized = useRef(false);
+  const prevUserIdRef = useRef<string | null>(null);
   const { user, logout } = useAuthStore();
   const [loadingCanvas, setLoadingCanvas] = useState(false);
 
   const handleLogout = () => {
     logout();
-    setMemoriesNeedsSync(true);
+    resetStore();
     router.replace('/');
   };
 
@@ -69,10 +71,14 @@ function WorkspaceInner() {
   };
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
+    const currentUserId = clerkUser?.id ?? 'local';
+    if (prevUserIdRef.current && prevUserIdRef.current !== currentUserId) {
+      // User switched — clear canvas and caches
+      resetStore();
+    }
+    prevUserIdRef.current = currentUserId;
     loadCanvasFromDB();
-  }, []);
+  }, [clerkUser?.id]);
 
   return (
     <main className="flex h-screen w-full bg-[#f1f5f9] overflow-hidden text-gray-900 antialiased relative">
@@ -86,13 +92,13 @@ function WorkspaceInner() {
           </div>
 
           <div className="flex items-center gap-3 text-sm font-medium text-gray-600">
-            <button
-              onClick={handleLogout}
-              className="text-gray-500 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition"
-              title="Sign Out"
-            >
-              <LogOut size={16} />
-            </button>
+            <UserButton
+              appearance={{
+                elements: {
+                  userButtonAvatarBox: 'w-7 h-7 border border-gray-200 shadow-sm',
+                },
+              }}
+            />
           </div>
         </div>
 

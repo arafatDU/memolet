@@ -8,6 +8,8 @@ from app.db.session import get_db
 from app.models.memolet import User
 from app.schemas.user import TokenData
 
+from app.services.clerk_auth import clerk_auth_service
+
 bearer_scheme = HTTPBearer(auto_error=True)
 
 def get_current_user(
@@ -19,19 +21,29 @@ def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = credentials.credentials
+
+    # 1. First try Clerk RS256 token verification
+    clerk_payload = clerk_auth_service.verify_token(token)
+    if clerk_payload:
+        clerk_user_id = clerk_payload.get("sub")
+        if clerk_user_id:
+            user = clerk_auth_service.get_or_sync_user(db, clerk_user_id, claims=clerk_payload)
+            if user:
+                return user
+
+    # 2. Fallback to local HS256 JWT verification (for backwards compatibility)
     try:
-        token = credentials.credentials
         payload = jwt.decode(
             token, settings.JWT_SECRET, algorithms=["HS256"]
         )
         username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-        token_data = TokenData(username=username)
+        if username:
+            user = db.query(User).filter(User.username == username).first()
+            if user:
+                return user
     except JWTError:
-        raise credentials_exception
-        
-    user = db.query(User).filter(User.username == token_data.username).first()
-    if user is None:
-        raise credentials_exception
-    return user
+        pass
+
+    raise credentials_exception
+
