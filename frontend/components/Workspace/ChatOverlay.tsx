@@ -58,6 +58,18 @@ export default function ChatOverlay() {
       });
   }, []);
 
+  const activeConversationId = useMemoletStore((s) => s.activeConversationId);
+  const setActiveConversationId = useMemoletStore((s) => s.setActiveConversationId);
+
+  // Load newly imported conversation if triggered
+  useEffect(() => {
+    if (activeConversationId) {
+      loadConversation(activeConversationId);
+      fetchConversations();
+      setActiveConversationId(null);
+    }
+  }, [activeConversationId]);
+
   // Fetch conversations when sidebar opens
   useEffect(() => {
     if (rightSidebarOpen) {
