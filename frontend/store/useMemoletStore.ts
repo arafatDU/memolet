@@ -46,6 +46,12 @@ interface MemoletState {
   selectedNodeId: string | null;
   setSelectedNodeId: (id: string | null) => void;
 
+  importModalOpen: boolean;
+  setImportModalOpen: (isOpen: boolean) => void;
+
+  activeConversationId: string | null;
+  setActiveConversationId: (id: string | null) => void;
+
   memoriesNeedsSync: boolean;
   setMemoriesNeedsSync: (needsSync: boolean) => void;
   resetStore: () => void;
@@ -56,8 +62,13 @@ export const useMemoletStore = create<MemoletState>((set, get) => ({
   edges: [],
   leftSidebarOpen: false,
   rightSidebarOpen: false,
+  importModalOpen: false,
+  activeConversationId: null,
   selectedNodeId: null,
   memoriesNeedsSync: true,
+
+  setImportModalOpen: (isOpen) => set({ importModalOpen: isOpen }),
+  setActiveConversationId: (id) => set({ activeConversationId: id }),
 
   resetStore: () =>
     set({
@@ -65,6 +76,8 @@ export const useMemoletStore = create<MemoletState>((set, get) => ({
       edges: [],
       leftSidebarOpen: false,
       rightSidebarOpen: false,
+      importModalOpen: false,
+      activeConversationId: null,
       selectedNodeId: null,
       memoriesNeedsSync: true,
     }),

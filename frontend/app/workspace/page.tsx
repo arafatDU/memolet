@@ -7,18 +7,19 @@ import { UserButton, useUser } from '@clerk/nextjs';
 import LeftSidebar from '@/components/Sidebar/LeftSidebar';
 import ChatOverlay from '@/components/Workspace/ChatOverlay';
 import GetMemoryOverlay from '@/components/Workspace/GetMemoryOverlay';
+import ImportChatModal from '@/components/Workspace/ImportChatModal';
 import SandboxCanvas from '@/components/Canvas/SandboxCanvas';
 import DocViewer from '@/components/Sidebar/DocViewer';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Download } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { memoriesApi, parseMemoletText } from '@/lib/api';
 
 function WorkspaceInner() {
   const router = useRouter();
   const { user: clerkUser } = useUser();
-  const { setNodes, nodes, setMemoriesNeedsSync, resetStore } = useMemoletStore();
+  const { setNodes, nodes, setMemoriesNeedsSync, resetStore, setImportModalOpen, setActiveConversationId } = useMemoletStore();
   const selectedNodeId = useMemoletStore((s) => s.selectedNodeId);
   const prevUserIdRef = useRef<string | null>(null);
   const { user, logout } = useAuthStore();
@@ -87,8 +88,19 @@ function WorkspaceInner() {
       <div className="flex-1 flex flex-col relative h-full min-w-0">
         {/* Toolbar */}
         <div className="h-12 bg-white flex items-center justify-between px-6 border-b border-gray-200 shadow-sm z-10 flex-shrink-0 w-full">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-gray-700 tracking-tight select-none">🧠 Memolet</span>
+          <div className="flex items-center gap-4">
+            <span className="text-sm font-bold text-gray-800 tracking-tight select-none flex items-center gap-1.5">
+              🧠 Memolet
+            </span>
+
+            <button
+              onClick={() => setImportModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition shadow-2xs cursor-pointer"
+              title="Import conversation turns from ChatGPT, Gemini, or Claude"
+            >
+              <Download size={13} />
+              <span>Import Chat</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-3 text-sm font-medium text-gray-600">
@@ -126,6 +138,7 @@ function WorkspaceInner() {
 
       <GetMemoryOverlay />
       <ChatOverlay />
+      <ImportChatModal onConversationImported={(id) => setActiveConversationId(id)} />
     </main>
   );
 }

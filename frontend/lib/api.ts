@@ -291,3 +291,47 @@ export const chatApi = {
   deleteConversation: (id: string) =>
     apiFetch<{ message: string }>(`/chat/conversations/${id}`, { method: 'DELETE' }),
 };
+
+// ── Cross-Platform Importer endpoints ───────────────────────────────────────
+
+export interface TurnPairDTO {
+  user: string;
+  ai: string;
+}
+
+export interface PreviewImportResponse {
+  title: string;
+  source: string;
+  turns: TurnPairDTO[];
+  total_turns: number;
+}
+
+export interface CommitImportRequest {
+  title?: string;
+  turns: TurnPairDTO[];
+  create_conversation?: boolean;
+  save_to_memory?: boolean;
+  generate_ai_summary?: boolean;
+}
+
+export interface CommitImportResponse {
+  conversation_id?: string;
+  title?: string;
+  total_turns: number;
+  saved_memolets_count: number;
+  saved_memolets: Array<{ id: string; summary: string; color: string }>;
+}
+
+export const importApi = {
+  preview: (payload: { url?: string; text?: string }) =>
+    apiFetch<PreviewImportResponse>('/import/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  commit: (payload: CommitImportRequest) =>
+    apiFetch<CommitImportResponse>('/import/commit', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
